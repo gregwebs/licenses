@@ -3,10 +3,12 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/csv"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -387,6 +389,7 @@ type License struct {
 	Err          string
 	ExtraWords   []string
 	MissingWords []string
+	FullText     []byte
 }
 
 func listLicenses(gopath string, pkgs []string) ([]License, error) {
@@ -449,6 +452,7 @@ func listLicenses(gopath string, pkgs []string) ([]License, error) {
 				}
 				m = matchTemplates(data, templates)
 				matched[fpath] = m
+				license.FullText = data
 			}
 			license.Score = m.Score
 			license.Template = m.Template
@@ -541,6 +545,7 @@ func groupLicenses(licenses []License) ([]License, error) {
 type Row struct {
 	Package, License, Match, Words string
 	Score                          float64
+	FullText                       string
 }
 
 type Rows []Row
@@ -595,6 +600,7 @@ func generateReport(report string, licenses []License, confidence float64, words
 		table[i].Match = fmt.Sprintf("%2d%%", int(100*l.Score+.5))
 		table[i].Words = diff
 		table[i].Score = l.Score
+		table[i].FullText = string(l.FullText)
 	}
 	sort.Sort(table)
 
@@ -620,64 +626,89 @@ func generateReport(report string, licenses []License, confidence float64, words
 	}
 	defer out.Close()
 
-	writeHeading := func(name string, width int) int {
-		out.WriteString(" ")
-		out.WriteString(name)
-		padding, rowWidth := width-len(name), width
-		if padding < 0 {
-			padding, rowWidth = 0, len(name)
+	if true {
+		w := csv.NewWriter(out)
+
+		for _, row := range table {
+			csvOut := []string{
+				row.Package,
+				row.License,
+				row.FullText,
+				row.Match,
+				row.Words,
+			}
+			if err := w.Write(csvOut); err != nil {
+				log.Fatalln("error writing record to csv:", err)
+			}
 		}
-		for i := 0; i < padding; i++ {
+
+		// Write any buffered data to the underlying writer (standard output).
+		w.Flush()
+
+		if err := w.Error(); err != nil {
+			log.Fatal(err)
+		}
+
+	} else {
+		writeHeading := func(name string, width int) int {
 			out.WriteString(" ")
-		}
-		out.WriteString(" |")
+			out.WriteString(name)
+			padding, rowWidth := width-len(name), width
+			if padding < 0 {
+				padding, rowWidth = 0, len(name)
+			}
+			for i := 0; i < padding; i++ {
+				out.WriteString(" ")
+			}
+			out.WriteString(" |")
 
-		return rowWidth
-	}
-	out.WriteString("|")
-	rowWidthPackage := writeHeading("Package", maxPackage)
-	rowWidthLicense := writeHeading("License", maxLicense)
-	rowWidthMatch := writeHeading("Match", maxMatch)
-	var rowWidthWords int
-	if words {
-		rowWidthWords = writeHeading("Words", maxWords)
-	}
-	out.WriteString("\n")
-
-	writeSep := func(width int) {
-		out.WriteString(" ")
-		for i := 0; i < width; i++ {
-			out.WriteString("-")
+			return rowWidth
 		}
-		out.WriteString(" |")
-	}
-	out.WriteString("|")
-	writeSep(rowWidthPackage)
-	writeSep(rowWidthLicense)
-	writeSep(rowWidthMatch)
-	if words {
-		writeSep(rowWidthWords)
-	}
-	out.WriteString("\n")
-
-	writeRow := func(data string, width int) {
-		out.WriteString(" ")
-		out.WriteString(data)
-		padding := width - len(data)
-		for i := 0; i < padding; i++ {
-			out.WriteString(" ")
-		}
-		out.WriteString(" |")
-	}
-	for _, row := range table {
 		out.WriteString("|")
-		writeRow(row.Package, rowWidthPackage)
-		writeRow(row.License, rowWidthLicense)
-		writeRow(row.Match, rowWidthMatch)
+		rowWidthPackage := writeHeading("Package", maxPackage)
+		rowWidthLicense := writeHeading("License", maxLicense)
+		rowWidthMatch := writeHeading("Match", maxMatch)
+		var rowWidthWords int
 		if words {
-			writeRow(row.Words, rowWidthWords)
+			rowWidthWords = writeHeading("Words", maxWords)
 		}
 		out.WriteString("\n")
+
+		writeSep := func(width int) {
+			out.WriteString(" ")
+			for i := 0; i < width; i++ {
+				out.WriteString("-")
+			}
+			out.WriteString(" |")
+		}
+		out.WriteString("|")
+		writeSep(rowWidthPackage)
+		writeSep(rowWidthLicense)
+		writeSep(rowWidthMatch)
+		if words {
+			writeSep(rowWidthWords)
+		}
+		out.WriteString("\n")
+
+		writeRow := func(data string, width int) {
+			out.WriteString(" ")
+			out.WriteString(data)
+			padding := width - len(data)
+			for i := 0; i < padding; i++ {
+				out.WriteString(" ")
+			}
+			out.WriteString(" |")
+		}
+		for _, row := range table {
+			out.WriteString("|")
+			writeRow(row.Package, rowWidthPackage)
+			writeRow(row.License, rowWidthLicense)
+			writeRow(row.Match, rowWidthMatch)
+			if words {
+				writeRow(row.Words, rowWidthWords)
+			}
+			out.WriteString("\n")
+		}
 	}
 
 	return nil
